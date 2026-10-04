@@ -1,0 +1,154 @@
+import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+const bank = JSON.parse(readFileSync('public/questions/questions.json', 'utf8'));
+const questions = bank.questions.slice(0, 50);
+const KEY = 'drivequiz:state:v1';
+function seed(now: number, correct = 0, expired = false) {
+  return {
+    app: 'drivequiz-tw',
+    schemaVersion: 1,
+    data: {
+      progress: {},
+      attempts: [],
+      sessions: [],
+      favorites: [],
+      settings: { theme: 'light', largeText: false, highContrast: false },
+      lastResult: null,
+      active: {
+        id: 'test-session',
+        mode: 'mock',
+        questionIds: questions.map((q: any) => q.id),
+        position: 0,
+        startedAt: expired ? now - 1800001 : now - 10000,
+        deadline: expired ? now - 1 : now + 1790000,
+        answers: Object.fromEntries(
+          questions
+            .slice(0, correct)
+            .map((q: any) => [
+              q.id,
+              { selected: q.answer, answeredAt: now - 5000, responseMs: 1000 },
+            ]),
+        ),
+      },
+    },
+  };
+}
+
+test('fresh dashboard and mobile layout have no invented progress or overflow', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '你的弱點地圖，從第一題開始。' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: '開啟選單' }).click();
+  await page.getByRole('link', { name: '模擬測驗', exact: true }).click();
+  await expect(page.getByRole('button', { name: '開始測驗 · 30:00' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+test('starts at 30:00, hides answers, saves selected choice and timer through refresh', async ({
+  page,
+}) => {
+  await page.clock.install({ time: new Date('2026-10-04T08:00:00Z') });
+  await page.goto('/#/mock');
+  await page.getByRole('button', { name: '開始測驗 · 30:00' }).click();
+  await expect(page.getByTestId('exam-timer')).toHaveText('30:00');
+  await page.getByRole('group', { name: '選擇答案' }).getByRole('button').first().click();
+  await expect(page.getByText('官方正解：', { exact: false })).toHaveCount(0);
+  await page.clock.fastForward(65000);
+  await expect(page.getByTestId('exam-timer')).toHaveText('28:55');
+  await page.reload();
+  await expect(page.getByTestId('exam-timer')).toHaveText('28:55');
+  await expect(
+    page.getByRole('group', { name: '選擇答案' }).getByRole('button').first(),
+  ).toHaveAttribute('aria-pressed', 'true');
+});
+test('early submit preserves time and analyzes wrong and unanswered questions', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const now = Date.now();
+  await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
+    KEY,
+    data: seed(now, 1),
+  });
+  await page.goto('/#/practice');
+  await page.reload();
+  await page.getByRole('button', { name: '交卷並查看結果' }).click();
+  await expect(page.getByRole('dialog')).toContainText('還有 49 題未作答');
+  await page.getByRole('button', { name: '確認交卷', exact: true }).click();
+  await expect(page.getByTestId('result-score')).toHaveText('2分');
+  await expect(page.getByTestId('remaining-time')).not.toHaveText('00:00');
+  await expect(page.getByRole('heading', { name: '錯題分析 49' })).toBeVisible();
+  const before = await page.evaluate((KEY) => JSON.parse(localStorage.getItem(KEY)!).data, KEY);
+  expect(before.attempts).toHaveLength(1);
+  const frozenTime = await page.getByTestId('remaining-time').textContent();
+  await page.reload();
+  const after = await page.evaluate((KEY) => JSON.parse(localStorage.getItem(KEY)!).data, KEY);
+  expect(after.attempts).toHaveLength(1);
+  expect(after.sessions).toHaveLength(1);
+  await expect(page.getByTestId('remaining-time')).toHaveText(frozenTime!);
+});
+test('expired restored exam auto-submits once with 00:00 remaining', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
+    KEY,
+    data: seed(Date.now(), 43, true),
+  });
+  await page.reload();
+  await expect(page.getByTestId('result-score')).toHaveText('86分');
+  await expect(page.getByTestId('remaining-time')).toHaveText('00:00');
+  await expect(page.getByText('✓ 達到及格門檻')).toBeVisible();
+  await expect(page.getByText('時間到，系統已自動交卷。')).toBeVisible();
+  await page.reload();
+  const data = await page.evaluate((KEY) => JSON.parse(localStorage.getItem(KEY)!).data, KEY);
+  expect(data.attempts).toHaveLength(43);
+  expect(data.sessions).toHaveLength(1);
+});
+test('live deadline auto-submits even after navigating away', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-10-04T08:00:00Z') });
+  await page.goto('/#/mock');
+  await page.getByRole('button', { name: '開始測驗 · 30:00' }).click();
+  await page.getByRole('link', { name: '稍後繼續' }).click();
+  await page.clock.fastForward(1800000);
+  await expect(page.getByTestId('remaining-time')).toHaveText('00:00');
+  await expect(page.getByTestId('result-score')).toHaveText('0分');
+});
+test('practice shows inline feedback and valid record survives reload', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '開始智慧複習' }).click();
+  await page.getByRole('group', { name: '選擇答案' }).getByRole('button').first().click();
+  await expect(page.getByText('官方正解：', { exact: false })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('官方正解：', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: '下一題', exact: true }).click();
+  await expect(page.getByText('第 2 / 20 題', { exact: false })).toBeVisible();
+});
+test('backup exports and invalid import keeps original data', async ({ page }) => {
+  await page.goto('/#/settings');
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: '匯出學習紀錄' }).click();
+  expect((await download).suggestedFilename()).toMatch(/drivequiz-backup/);
+  await page
+    .locator('input[type=file]')
+    .setInputFiles({
+      name: 'invalid.json',
+      mimeType: 'application/json',
+      buffer: Buffer.from('{"app":"wrong"}'),
+    });
+  await expect(page.getByRole('status')).toContainText('匯入失敗');
+  await page.getByRole('button', { name: '清除', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+test('search renders the image-only options and allows favorite filtering', async ({ page }) => {
+  await page.goto('/#/bank');
+  await page.getByRole('textbox', { name: '搜尋題號或關鍵字' }).fill('183');
+  await page.getByRole('button', { name: '查看題目與答案' }).click();
+  await expect(page.getByText('圖中選項 2')).toBeVisible();
+  await expect(page.getByRole('img', { name: '第 183 題的交通圖示' })).toBeVisible();
+  await page.getByRole('button', { name: '收藏這題' }).first().click();
+  await page.getByRole('button', { name: /我的收藏/ }).click();
+  await expect(page.getByText('#183', { exact: true })).toBeVisible();
+});

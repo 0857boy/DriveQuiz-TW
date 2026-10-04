@@ -1,0 +1,7 @@
+public/questions/
+dist/
+node_modules/
+tmp/
+package-lock.json
+test-results/
+playwright-report/
