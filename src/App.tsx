@@ -43,7 +43,6 @@ import {
   remainingSeconds,
   selectSmart,
   shuffle,
-  weakness,
 } from './lib/engine';
 import {
   ArrowLabel,
@@ -1041,28 +1040,20 @@ function Result({ bank, start }: PageProps) {
   );
 }
 function Weakness({ bank, start }: PageProps) {
-  const progress = useStudy((s) => s.progress),
-    [category, setCategory] = useState('all');
-  const stats = categoryStats(bank.questions, progress)
-    .filter((s) => s.seen > 0)
-    .sort((a, b) => b.weakness - a.weakness);
+  const progress = useStudy((s) => s.progress);
   const weak = bank.questions
-    .filter(
-      (q) =>
-        progress[q.id] &&
-        weakness(progress[q.id]) >= 35 &&
-        (category === 'all' || q.category === category),
-    )
-    .sort((a, b) => weakness(progress[b.id]) - weakness(progress[a.id]));
+    .filter((q) => (progress[q.id]?.wrongCount ?? 0) > 0)
+    .sort((a, b) => progress[b.id].wrongCount - progress[a.id].wrongCount || a.id - b.id);
+  const totalWrong = weak.reduce((total, q) => total + progress[q.id].wrongCount, 0);
   return (
     <>
       <PageTitle eyebrow="FOCUS ON WHAT MATTERS" title="找到弱點，也找到方向。">
-        不只記下錯題。綜合錯誤率、最近表現、作答速度與複習時間，安排下一步。
+        直接查看答錯過的題目，依累計答錯次數由高到低排列，先練最常錯的題。
       </PageTitle>
       <ResumeNotice />
-      {!stats.length ? (
-        <Empty title="先開始練習，才能看見弱點">
-          答過的題目會出現在這裡。
+      {!weak.length ? (
+        <Empty title="目前沒有答錯的題目">
+          答錯過的題目會列在這裡，並持續累計答錯次數。
           <Link to="/" className="text-link">
             回首頁開始智慧複習 <ArrowRight size={16} />
           </Link>
@@ -1075,71 +1066,42 @@ function Weakness({ bank, start }: PageProps) {
             </span>
             <div>
               <h2>
-                {weak.length ? `${weak.length} 題，值得再多練一次。` : '目前沒有高風險題目。'}
+                {weak.length} 題錯題 · 累計答錯 {totalWrong} 次
               </h2>
-              <p>答對後會安排間隔複習，確認你真的記住了。</p>
+              <p>優先練習答錯最多的 {Math.min(weak.length, 20)} 題。</p>
             </div>
-            <button
-              className="btn primary"
-              disabled={!weak.length}
-              onClick={() => start('weakness', shuffle(weak.slice(0, 60)).slice(0, 20))}
-            >
+            <button className="btn primary" onClick={() => start('weakness', weak.slice(0, 20))}>
               <ArrowLabel>開始弱點特訓</ArrowLabel>
             </button>
           </div>
-          <div className="filter-row">
-            <label htmlFor="weak-category">特訓分類</label>
-            <select
-              id="weak-category"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="all">所有弱點</option>
-              {stats.map((s) => (
-                <option key={s.category}>{s.category}</option>
-              ))}
-            </select>
-          </div>
-          <div className="category-grid">
-            {stats
-              .filter((s) => category === 'all' || s.category === category)
-              .map((s) => (
-                <div className="panel category-card" key={s.category}>
-                  <div className="row-between">
-                    <Target size={24} />
-                    <span className={`weak-badge ${s.weakness < 35 ? 'stable' : ''}`}>
-                      {s.weakness >= 35 ? '需要加強' : '持續鞏固'}
-                    </span>
+          <ol className="weakness-questions" aria-label="依累計答錯次數排序的錯題">
+            {weak.map((q, index) => (
+              <li className="panel weakness-question" key={q.id}>
+                <div className="row-between">
+                  <div className="weakness-question-meta">
+                    <span className="rank">{index + 1}</span>
+                    <span className="tiny">題號 #{q.id}</span>
+                    <span className="weak-badge">累計答錯 {progress[q.id].wrongCount} 次</span>
                   </div>
-                  <h2>{s.category}</h2>
-                  <p>
-                    作答 {s.attempts} 次 · 正確率 {s.accuracy}%
-                  </p>
-                  <Meter value={s.mastery} label={`${s.category}掌握度`} />
-                  <div className="row-between tiny">
-                    <span>題庫掌握度 {s.mastery}%</span>
-                    <span>
-                      已看過 {s.seen} / {s.total} 題
-                    </span>
-                  </div>
+                  <Favorite id={q.id} />
+                </div>
+                <QuestionImage question={q} />
+                <h3>{q.question}</h3>
+                <div className="row-between">
+                  <p className="tiny">已作答 {progress[q.id].attempts} 次</p>
                   <button
                     className="text-link"
-                    onClick={() =>
-                      start(
-                        'weakness',
-                        shuffle(
-                          bank.questions.filter((q) => q.category === s.category && progress[q.id]),
-                        ).slice(0, 20),
-                      )
-                    }
+                    aria-label={`練習第 ${q.id} 題`}
+                    onClick={() => start('weakness', [q])}
                   >
-                    練習這個分類 <ArrowRight size={16} />
+                    練習這題 <ArrowRight size={16} />
                   </button>
                 </div>
-              ))}
-          </div>
+              </li>
+            ))}
+          </ol>
           <p className="source-note">
-            掌握度會計入尚未作答題與作答次數；第一次答對不代表已完全熟練。
+            每答錯一次就累加一次；之後答對也會保留累計次數。次數相同時依題號排列。
           </p>
         </>
       )}

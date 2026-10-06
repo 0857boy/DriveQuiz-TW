@@ -129,13 +129,11 @@ test('backup exports and invalid import keeps original data', async ({ page }) =
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: '匯出學習紀錄' }).click();
   expect((await download).suggestedFilename()).toMatch(/drivequiz-backup/);
-  await page
-    .locator('input[type=file]')
-    .setInputFiles({
-      name: 'invalid.json',
-      mimeType: 'application/json',
-      buffer: Buffer.from('{"app":"wrong"}'),
-    });
+  await page.locator('input[type=file]').setInputFiles({
+    name: 'invalid.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{"app":"wrong"}'),
+  });
   await expect(page.getByRole('status')).toContainText('匯入失敗');
   await page.getByRole('button', { name: '清除', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
@@ -151,4 +149,86 @@ test('search renders the image-only options and allows favorite filtering', asyn
   await page.getByRole('button', { name: '收藏這題' }).first().click();
   await page.getByRole('button', { name: /我的收藏/ }).click();
   await expect(page.getByText('#183', { exact: true })).toBeVisible();
+});
+
+test('weakness lists cumulative mistakes, updates their order and retains counts after correct answers', async ({
+  page,
+}) => {
+  const now = Date.now();
+  const progress = Object.fromEntries(
+    [
+      [1, 2, 0],
+      [2, 5, 10],
+      [3, 5, 1],
+      [183, 3, 0],
+      [4, 0, 1],
+    ].map(([id, wrongCount, correctCount]) => {
+      const q = bank.questions.find((q: any) => q.id === id);
+      return [
+        id,
+        {
+          attempts: wrongCount + correctCount,
+          correctCount,
+          wrongCount,
+          streak: correctCount,
+          lastAnswerCorrect: correctCount > 0,
+          lastSelectedAnswer: correctCount > 0 ? q.answer : (q.answer % 3) + 1,
+          lastSeenAt: now,
+          nextReviewAt: now + 86400000,
+          reviewLevel: 5,
+          averageResponseMs: 1000,
+          fingerprint: q.fingerprint,
+        },
+      ];
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
+    KEY,
+    data: { ...seed(now), data: { ...seed(now).data, active: null, progress } },
+  });
+  await page.goto('/#/weakness');
+  await page.reload();
+  const list = page.getByRole('list', { name: '依累計答錯次數排序的錯題' });
+  const ids = list.getByText(/^題號 #/);
+  await expect(ids).toHaveText(['題號 #2', '題號 #3', '題號 #183', '題號 #1']);
+  await expect(list.getByText('累計答錯 5 次')).toHaveCount(2);
+  await expect(page.getByRole('combobox')).toHaveCount(0);
+  await expect(page.getByRole('img', { name: '第 183 題的交通圖示' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  const answer = bank.questions[0].answer;
+  await page.getByRole('button', { name: '練習第 1 題', exact: true }).click();
+  await page
+    .getByRole('group', { name: '選擇答案' })
+    .getByRole('button')
+    .nth(answer % 3)
+    .click();
+  await page.getByRole('button', { name: '查看練習結果' }).click();
+  await page.goto('/#/weakness');
+  await expect(ids).toHaveText(['題號 #2', '題號 #3', '題號 #1', '題號 #183']);
+  await expect(list.getByRole('listitem').nth(2)).toContainText('累計答錯 3 次');
+
+  await page.getByRole('button', { name: '練習第 1 題', exact: true }).click();
+  await page
+    .getByRole('group', { name: '選擇答案' })
+    .getByRole('button')
+    .nth(answer - 1)
+    .click();
+  await page.getByRole('button', { name: '查看練習結果' }).click();
+  await page.goto('/#/weakness');
+  await page.reload();
+  await expect(ids).toHaveText(['題號 #2', '題號 #3', '題號 #1', '題號 #183']);
+  await expect(list.getByRole('listitem').nth(2)).toContainText('累計答錯 3 次');
+  await page.screenshot({ path: 'test-results/weakness-mobile.png', fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1060 });
+  await page.screenshot({ path: 'test-results/weakness-desktop.png', fullPage: true });
+
+  await page.getByRole('button', { name: '開始弱點特訓', exact: true }).click();
+  const session = await page.evaluate(
+    (KEY) => JSON.parse(localStorage.getItem(KEY)!).data.active,
+    KEY,
+  );
+  expect(session.questionIds).toEqual([2, 3, 1, 183]);
 });

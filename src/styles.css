@@ -2571,6 +2571,25 @@ footer > a {
   }
 }
 /* Keep the exam navigator usable with a finger as well as a pointer. */
+.weakness-questions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+.weakness-question-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.weakness-question h3 {
+  margin: 14px 0;
+  font-size: 16px;
+  line-height: 1.85;
+  letter-spacing: 0;
+}
 .question-grid {
   grid-template-columns: repeat(4, 1fr);
 }
