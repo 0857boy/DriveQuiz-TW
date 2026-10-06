@@ -136,7 +136,23 @@ export default function App() {
     };
   }, [bank, navigate]);
   function start(mode: Mode, questions: Question[]) {
-    useStudy.getState().start(mode, questions);
+    const study = useStudy.getState();
+    // A single-question drill is an explicit target, unlike resuming a session.
+    if (mode === 'weakness' && questions.length === 1 && study.active?.mode !== 'mock') {
+      const active = study.active;
+      const position =
+        active?.mode === 'weakness' ? active.questionIds.indexOf(questions[0].id) : -1;
+      if (active && position >= 0 && !active.answers[questions[0].id]) {
+        study.move(position);
+        navigate('/practice');
+        return;
+      }
+      if (active) {
+        if (Object.keys(active.answers).length) study.finish(bank?.questions ?? questions);
+        else study.abandon();
+      }
+    }
+    study.start(mode, questions);
     navigate('/practice');
   }
   return (
@@ -723,6 +739,7 @@ function Practice({ bank }: { bank: Bank }) {
     );
   const count = Object.keys(session.answers).length,
     remaining = session.deadline ? remainingSeconds(session.deadline, now) : 0;
+  const singleQuestion = !isMock && session.questionIds.length === 1;
   const correct = selected === q.answer;
   return (
     <div className="practice-layout">
@@ -743,7 +760,9 @@ function Practice({ bank }: { bank: Bank }) {
           </div>
         ) : (
           <span className="tiny">
-            {session.position + 1} / {session.questionIds.length}
+            {singleQuestion
+              ? '單題練習'
+              : `${session.position + 1} / ${session.questionIds.length}`}
           </span>
         )}
       </div>
@@ -751,7 +770,10 @@ function Practice({ bank }: { bank: Bank }) {
         <section className="question-panel">
           <div className="row-between">
             <span className="tiny">
-              第 {session.position + 1} / {session.questionIds.length} 題 · 題號 #{q.id}
+              {singleQuestion
+                ? '單題練習'
+                : `第 ${session.position + 1} / ${session.questionIds.length} 題`}{' '}
+              · 題號 #{q.id}
             </span>
             <Favorite id={q.id} />
           </div>

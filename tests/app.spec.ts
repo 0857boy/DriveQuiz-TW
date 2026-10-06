@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { updateProgress } from '../src/lib/engine';
 const bank = JSON.parse(readFileSync('public/questions/questions.json', 'utf8'));
 const questions = bank.questions.slice(0, 50);
 const KEY = 'drivequiz:state:v1';
@@ -184,6 +185,7 @@ test('weakness lists cumulative mistakes, updates their order and retains counts
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  await page.getByRole('button', { name: '開始智慧複習', exact: true }).waitFor();
   await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
     KEY,
     data: { ...seed(now), data: { ...seed(now).data, active: null, progress } },
@@ -231,4 +233,95 @@ test('weakness lists cumulative mistakes, updates their order and retains counts
     KEY,
   );
   expect(session.questionIds).toEqual([2, 3, 1, 183]);
+});
+
+test('opening another weakness question shows the chosen question instead of the unfinished first one', async ({
+  page,
+}) => {
+  const now = Date.now(),
+    saved = seed(now);
+  const progress = Object.fromEntries(
+    bank.questions
+      .slice(0, 3)
+      .map((q: any) => [q.id, updateProgress(undefined, q, (q.answer % 3) + 1, 1000, now)]),
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: '開始智慧複習', exact: true }).waitFor();
+  await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
+    KEY,
+    data: {
+      ...saved,
+      data: {
+        ...saved.data,
+        progress,
+        active: { ...saved.data.active, mode: 'weakness', deadline: undefined, questionIds: [1] },
+      },
+    },
+  });
+  await page.goto('/#/weakness');
+  await page.reload();
+  for (const id of [2, 3]) {
+    await page.getByRole('button', { name: `練習第 ${id} 題`, exact: true }).click();
+    await expect(page.getByText(new RegExp(`題號 #${id}$`))).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(
+      bank.questions[id - 1].question,
+    );
+    await expect(page.getByRole('img', { name: `第 ${id} 題的交通圖示` })).toBeVisible();
+    await page.getByRole('link', { name: '稍後繼續' }).click();
+    await page.goto('/#/weakness');
+  }
+});
+
+test('opening weakness questions within an existing drill moves to them and preserves previous answers', async ({
+  page,
+}) => {
+  const now = Date.now(),
+    saved = seed(now);
+  const progress = Object.fromEntries(
+    bank.questions
+      .slice(0, 3)
+      .map((q: any) => [q.id, updateProgress(undefined, q, (q.answer % 3) + 1, 1000, now)]),
+  );
+  const firstAnswer = {
+    selected: bank.questions[0].answer,
+    answeredAt: now - 5000,
+    responseMs: 1000,
+  };
+  await page.goto('/');
+  await page.getByRole('button', { name: '開始智慧複習', exact: true }).waitFor();
+  await page.evaluate(({ KEY, data }) => localStorage.setItem(KEY, JSON.stringify(data)), {
+    KEY,
+    data: {
+      ...saved,
+      data: {
+        ...saved.data,
+        progress,
+        active: {
+          ...saved.data.active,
+          mode: 'weakness',
+          deadline: undefined,
+          questionIds: [1, 2, 3],
+          answers: { 1: firstAnswer },
+        },
+      },
+    },
+  });
+  await page.goto('/#/weakness');
+  await page.reload();
+  for (const id of [2, 3]) {
+    await page.getByRole('button', { name: `練習第 ${id} 題`, exact: true }).click();
+    await expect(page.getByText(`第 ${id} / 3 題 · 題號 #${id}`)).toBeVisible();
+    await expect(page.getByRole('img', { name: `第 ${id} 題的交通圖示` })).toBeVisible();
+    await page.reload();
+    await expect(page.getByText(`第 ${id} / 3 題 · 題號 #${id}`)).toBeVisible();
+    const active = await page.evaluate(
+      (KEY) => JSON.parse(localStorage.getItem(KEY)!).data.active,
+      KEY,
+    );
+    expect(active.id).toBe(saved.data.active.id);
+    expect(active.answers[1]).toEqual(firstAnswer);
+    expect(active.position).toBe(id - 1);
+    await page.getByRole('link', { name: '稍後繼續' }).click();
+    await page.goto('/#/weakness');
+  }
 });
